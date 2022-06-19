@@ -17,63 +17,83 @@ public:
   using const_iterator = Iterator<true>;
   using iterator_category = std::random_access_iterator_tag;
 
-  Deque(): Deque<T>(0) {}
+  Deque() noexcept : Deque<T>(0) {}
 
-  explicit Deque(size_t size) noexcept : size_(size) {
+  explicit Deque(size_t size) {
     size_t nodes = (size + kNodeCapacity) / kNodeCapacity;
-    external_.assign(nodes, reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]));
+    for (size_t i = 0; i < nodes; i++) {
+      try {
+        T* t = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
+        external_.push_back(t);
+      } catch (...) {
+        for (size_t j = 0; j < i; j++) {
+          delete[] reinterpret_cast<uint8_t*>(external_[j]);
+        }
+        throw;
+      }
+    }
+    size_ = size;
     begin_ = iterator(&external_, 0, 0);
     end_ = begin_ + size_;
   }
 
-  Deque(size_t size, const T& value) noexcept : Deque<T>(size) {
+  Deque(size_t size, const T& value) : Deque<T>(size) {
     for (iterator it = begin_; it != end_; it++) {
-      new(external_[it.getExternalIdx()] + it.getIdx()) T(value);
+      try {
+        new(external_[it.getExternalIdx()] + it.getIdx()) T(value);
+      } catch (...) {
+        for (auto i = begin_; i != it; i+=kNodeCapacity) {
+          delete[] reinterpret_cast<uint8_t*>(external_[i.getIdx()]);
+        }
+        throw;
+      }
     }
   }
 
-  Deque(const Deque<T>& other) noexcept : Deque<T>(other.size()) {
-    external_.assign(other.external_.size(), reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]));
-    begin_ = other.begin_;
-    begin_.setPtr(&external_);
-    end_ = begin_ + size_;
-    for (auto it = begin_, it2 = other.begin_; it2 != other.end_; it++, it2++) {
-      *it = *it2;
+  Deque(const Deque<T>& other) : Deque<T>(0) {
+    for (auto it = other.begin(); it != other.end(); it++) {
+      try {
+        push_back(*it);
+      } catch (...) {
+        for (auto i = begin_; i != end_; i+=kNodeCapacity) {
+          delete[] reinterpret_cast<uint8_t*>(external_[i.getIdx()]);
+        }
+        throw;
+      }
     }
   }
 
-  ~Deque() = default;
+  ~Deque() {
+    for (auto it = begin_; it != end_; ++it) {
+      it->~T();
+    }
+    for (size_t i = 0; i < external_.size(); ++i) {
+      delete[] reinterpret_cast<uint8_t*>(external_[i]);
+    }
+  }
 
   Deque<T>& operator=(const Deque<T>& other) {
-    Deque<T> tmp(other);
-    auto external = external_;
-    auto size = size_;
-    auto begin = begin_;
-    auto end = end_;
     try {
-      external_ = tmp.external_;
-      size_ = tmp.size_;
-      begin_ = tmp.begin_;
+      Deque<T> tmp(other);
+      std::swap(external_, tmp.external_);
+      std::swap(size_, tmp.size_);
+      std::swap(begin_, tmp.begin_);
       begin_.setPtr(&external_);
       end_ = begin_ + size_;
       return *this;
     } catch (...) {
-      external_ = external;
-      size_ = size;
-      begin_ = begin;
-      end_ = end;
       throw;
     }
   }
 
-  [[nodiscard]] size_t size() const {
+  [[nodiscard]] size_t size() const noexcept {
     return size_;
   }
 
-  T& operator[](int n) {
+  T& operator[](int n) noexcept {
     return *(begin_ + n);
   }
-  const T& operator[](int n) const {
+  const T& operator[](int n) const noexcept {
     return *(begin_ + n);
   }
   T& at(int n) {
@@ -92,24 +112,16 @@ public:
   }
 
   void push_back(const T& value) {
-    auto external = external_;
-    auto size = size_;
-    auto begin = begin_;
-    auto end = end_;
     try {
       if ((size_t)end_.getExternalIdx() >= external_.size()) {
         reallocate(false);
       }
-      new(external_[end_.getExternalIdx()] + end_.getIdx()) T(value);
-      ++size_;
-      ++end_;
     } catch (...) {
-      external_ = external;
-      size_ = size;
-      begin_ = begin;
-      end_ = end;
       throw;
     }
+    new(external_[end_.getExternalIdx()] + end_.getIdx()) T(value);
+    ++size_;
+    ++end_;
   }
   void pop_back() noexcept {
     --size_;
@@ -117,24 +129,17 @@ public:
     end_->~T();
   }
   void push_front(const T& value) {
-    auto external = external_;
-    auto size = size_;
-    auto begin = begin_;
-    auto end = end_;
     try {
       if (begin_.getExternalIdx() == 0 && begin_.getIdx() == 0) {
         reallocate(true);
       }
-      --begin_;
-      new(external_[begin_.getExternalIdx()] + begin_.getIdx()) T(value);
-      ++size_;
     } catch (...) {
-      external_ = external;
-      size_ = size;
-      begin_ = begin;
-      end_ = end;
       throw;
     }
+    iterator prev = begin_ - 1;
+    new(external_[prev.getExternalIdx()] + prev.getIdx()) T(value);
+    --begin_;
+    ++size_;
   }
   void pop_front() noexcept {
     --size_;
@@ -142,63 +147,57 @@ public:
     ++begin_;
   }
 
-  iterator begin() {
+
+  iterator begin() noexcept {
     return begin_;
   }
-  iterator end() {
+  iterator end() noexcept {
     return end_;
   }
-  const_iterator cbegin() const {
+  const_iterator cbegin() const noexcept {
     return const_iterator(begin_);
   }
-  const_iterator cend() const {
+  const_iterator cend() const noexcept {
     return const_iterator(end_);
   }
-  const_iterator begin() const {
+  const_iterator begin() const noexcept {
     return cbegin();
   }
-  const_iterator end() const {
+  const_iterator end() const noexcept {
     return cend();
   }
-  std::reverse_iterator<iterator> rbegin() {
+  std::reverse_iterator<iterator> rbegin() noexcept {
     return std::reverse_iterator<iterator>(Deque<T>::end());
   }
-  std::reverse_iterator<iterator> rend() {
+  std::reverse_iterator<iterator> rend() noexcept {
     return std::reverse_iterator<iterator>(Deque<T>::begin());
   }
-  std::reverse_iterator<const_iterator> crbegin() {
+  std::reverse_iterator<const_iterator> crbegin() noexcept {
     return std::reverse_iterator<const_iterator>(Deque<T>::cend());
   }
-  std::reverse_iterator<const_iterator> crend() {
+  std::reverse_iterator<const_iterator> crend() noexcept {
     return std::reverse_iterator<const_iterator>(Deque<T>::cbegin());
   }
 
   void insert(iterator pos, const T& value) {
-    auto external = external_;
-    auto size = size_;
-    auto begin = begin_;
-    auto end = end_;
     try {
       if ((size_t)pos.getExternalIdx() >= external_.size()) {
         reallocate(false);
       }
-      ++end_;
-      for (iterator it = end_ - 1; it != pos; it--) {
-        *it = *(it - 1);
-      }
-      *pos = value;
-      ++size_;
     } catch (...) {
-      external_ = external;
-      size_ = size;
-      begin_ = begin;
-      end_ = end;
       throw;
     }
+    ++end_;
+    for (iterator it = end_; it != pos; it--) {
+      std::swap(*it, *(it - 1));
+    }
+    *pos = value;
+    ++size_;
   }
+
   void erase(iterator pos) noexcept {
     for (iterator it = pos; it != end_ - 1; it++) {
-      *it = *(it + 1);
+      std::swap(*it, *(it + 1));
     }
     --size_;
     --end_;
@@ -215,18 +214,41 @@ private:
     std::vector<T*> newExternal;
     if (reallocateLeft) {
       for (size_t i = 0; i < external_.size(); i++) {
-        newExternal.push_back(reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]));
+        try {
+          T* t = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
+          newExternal.push_back(t);
+        } catch (...) {
+          for (size_t j = 0; j < newExternal.size(); j++) {
+            delete[] reinterpret_cast<uint8_t*>(external_[j]);
+          }
+          throw;
+        }
       }
     }
     for (size_t i = 0; i < external_.size(); i++) {
-      newExternal.push_back(external_[i]);
+      try {
+        newExternal.push_back(external_[i]);
+      } catch (...) {
+        for (size_t j = 0; j < newExternal.size(); j++) {
+          delete[] reinterpret_cast<uint8_t*>(external_[j]);
+        }
+        throw;
+      }
     }
     if (!reallocateLeft) {
       for (size_t i = 0; i < external_.size(); i++) {
-        newExternal.push_back(reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]));
+        try {
+          T* t = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
+          newExternal.push_back(t);
+        } catch (...) {
+          for (size_t j = 0; j < newExternal.size(); j++) {
+            delete[] reinterpret_cast<uint8_t*>(external_[j]);
+          }
+          throw;
+        }
       }
     }
-    external_ = newExternal;
+    std::swap(external_, newExternal);
     if (reallocateLeft) {
       begin_ = iterator(&external_, external_.size() / 2, 0);
       end_ = iterator(&external_, end_.getExternalIdx() + external_.size() / 2, end_.getIdx());
@@ -253,7 +275,7 @@ public:
   Iterator(const Iterator& other): ptr_(other.ptr_), externalIdx_(other.externalIdx_), idx_(other.idx_) {}
 
   ~Iterator() = default;
-  
+
   operator Iterator<true>() const {
     return Iterator<true>(ptr_, externalIdx_, idx_);
   }
@@ -345,7 +367,7 @@ public:
     } else if (externalIdx_ == it.externalIdx_) {
       result = idx_ - it.idx_;
     } else {
-      result = (abs(externalIdx_ - it.externalIdx_) - 1) * kNodeCapacity + (kNodeCapacity - it.idx_) + idx_;
+      result = (size_t)(abs((int)externalIdx_ - (int)it.externalIdx_) - 1) * kNodeCapacity + (kNodeCapacity - it.idx_) + idx_;
     }
     return result;
   }
