@@ -1,407 +1,386 @@
 #include <iostream>
+#include <vector>
 
 
-template<size_t N>
-class StackStorage {
-private:
-  char memory_[N];
-  char* ptr_ = memory_;
+const size_t kNodeCapacity = 128;
 
+template<typename T = int>
+class Deque {
 public:
-  StackStorage() = default;
-
-  StackStorage(const StackStorage&) = delete;
-
-  ~StackStorage() = default;
-
-  StackStorage& operator=(const StackStorage&) = delete;
-
-  template<typename T>
-  T* allocate(size_t capacity) {
-    ptr_ += alignof(T) - (ptr_ - memory_) % alignof(T);
-    T* begin = reinterpret_cast<T*>(ptr_);
-    ptr_ += capacity * sizeof(T);
-    return begin;
-  }
-
-  void deallocate(char*, size_t) {}
-};
-
-
-template<typename T, size_t N>
-class StackAllocator {
-private:
-  StackStorage<N>* storage_;
-
-public:
-  using value_type = T;
-  template<typename U>
-  struct rebind {
-    using other = StackAllocator<U, N>;
-  };
-
-  StackAllocator() = delete;
-
-  StackAllocator(StackStorage<N>& storage) noexcept : storage_(&storage) {}
-
-  template<typename U>
-  StackAllocator(const StackAllocator<U, N>& other) noexcept : storage_(other.storage_) {}
-
-  ~StackAllocator() = default;
-
-  template<typename U>
-  StackAllocator& operator=(const StackAllocator<U, N>& other) noexcept {
-    storage_ = other.storage_;
-    return *this;
-  }
-
-  T* allocate(size_t capacity) {
-    T* result = storage_->template allocate<T>(capacity);
-    return result;
-  }
-  void deallocate(T* ptr, size_t capacity) {
-    storage_->deallocate(reinterpret_cast<char*>(ptr), capacity * sizeof(T));
-  }
-
-  template<typename U, size_t M>
-  friend class StackAllocator;
-};
-
-
-template<typename T, typename Alloc = std::allocator<T>>
-class List {
-private:
-  struct Base {
-    Base* prev_ = this;
-    Base* next_ = this;
-
-    Base() : prev_(this), next_(this) {}
-
-    ~Base() = default;
-  };
-  struct Node : Base {
-    T value_;
-
-    Node() = default;
-
-    explicit Node(const T& value) : value_(value) {}
-
-    ~Node() = default;
-  };
-
-  using node_alloc = typename Alloc::template rebind<Node>::other;
-  using AllocTraits = std::allocator_traits<node_alloc>;
-
-  Base fakeNode_;
-  node_alloc alloc_;
-  size_t size_ = 0;
-
   template<bool isConst>
-  class Iterator {
-  private:
-    Base* ptr_;
+  class Iterator;
 
-  public:
-    using value_type = T;
-    using pointer = typename std::conditional<isConst, const T*, T*>::type;
-    using reference = typename std::conditional<isConst, const T&, T&>::type;
-    using iterator_category = std::bidirectional_iterator_tag;
-    using difference_type = ssize_t;
-
-    Iterator() = default;
-
-    Iterator(Base* ptr) : ptr_(ptr) {}
-
-    ~Iterator() = default;
-
-    operator Iterator<true>() const {
-      return Iterator<true>(ptr_);
-    }
-
-    Iterator<isConst> operator++(int) {
-      Iterator<isConst> tmp(*this);
-      ++(*this);
-      return tmp;
-    }
-
-    Iterator<isConst>& operator++() {
-      ptr_ = ptr_->next_;
-      return *this;
-    }
-
-    Iterator<isConst> operator--(int) {
-      Iterator<isConst> tmp(*this);
-      --(*this);
-      return tmp;
-    }
-
-    Iterator<isConst>& operator--() {
-      ptr_ = ptr_->prev_;
-      return *this;
-    }
-
-    bool operator==(const Iterator<isConst>& it) const {
-      return ptr_ == it.ptr_;
-    }
-
-    bool operator!=(const Iterator<isConst>& it) const {
-      return ptr_ != it.ptr_;
-    }
-
-    reference operator*() const {
-      return (reinterpret_cast<Node*>(ptr_))->value_;
-    }
-
-    pointer operator->() const {
-      return &(operator*());
-    }
-
-    Base* getPtr() {
-      return ptr_;
-    }
-  };
-  Iterator<false> begin_;
-  Iterator<false> end_;
-
-  void fake_push_back() {
-    Base* current = reinterpret_cast<Base*>(AllocTraits::allocate(alloc_, 1));
-    Base* prev = (end_.getPtr())->prev_;
-    Base* next = reinterpret_cast<Base*>(end_.getPtr());
-    try {
-      AllocTraits::construct(alloc_, reinterpret_cast<Node*>(current));
-      current->prev_ = prev;
-      current->next_ = next;
-      prev->next_ = current;
-      next->prev_ = current;
-      if (end_ == begin_) {
-        begin_ = iterator(current);
-      }
-      ++size_;
-    } catch (...) {
-      prev->next_ = next;
-      next->prev_ = prev;
-      end_ = iterator(next);
-      AllocTraits::destroy(alloc_, reinterpret_cast<Node*>(current));
-      AllocTraits::deallocate(alloc_, reinterpret_cast<Node*>(current), 1);
-      --size_;
-      throw;
-    }
-  }
-
-public:
   using value_type = T;
   using pointer = T*;
   using reference = T&;
   using iterator = Iterator<false>;
   using const_iterator = Iterator<true>;
-  using reverse_iterator = std::reverse_iterator<iterator>;
-  using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+  using iterator_category = std::random_access_iterator_tag;
 
-  List(): begin_(&fakeNode_), end_(&fakeNode_) {}
+  Deque() noexcept : Deque<T>(0) {}
 
-  List(size_t size): List<T, Alloc>() {
-    for (size_t i = 0; i < size; i++) {
-      fake_push_back();
-    }
-  }
-
-  List(size_t size, const T& value) : List<T, Alloc>(size) {
-    for (auto it = begin_; it != end_; it++) {
-      *it = value;
-    }
-  }
-
-  List(const Alloc& alloc) : alloc_(alloc), begin_(&fakeNode_), end_(&fakeNode_) {}
-
-  List(size_t size, const Alloc& alloc) : List<T, Alloc>(alloc) {
-    for (size_t i = 0; i < size; i++) {
-      fake_push_back();
-    }
-  }
-
-  List(size_t size, const T& value, const Alloc& alloc) : List<T, Alloc>(size, alloc) {
-    for (auto it = begin_; it != end_; it++) {
-      *it = value;
-    }
-  }
-
-  List(const List& other): List(AllocTraits::select_on_container_copy_construction(other.alloc_)) {
-    for (auto it = other.begin(); it != other.end(); ++it) {
-      push_back(*it);
-    }
-  }
-
-  List& operator=(const List& other) {
-    size_t currentSize = size_;
-    Base currentFakeNode = fakeNode_;
-    iterator currentBegin = begin_;
-    iterator currentEnd = end_;
-    node_alloc currentAlloc = alloc_;
-
-    try {
-      size_ = 0;
-      fakeNode_ = Base();
-      begin_ = &fakeNode_;
-      end_ = &fakeNode_;
-      if (AllocTraits::propagate_on_container_copy_assignment::value) {
-        alloc_  = other.alloc_;
+  explicit Deque(size_t size) {
+    size_t nodes = (size + kNodeCapacity) / kNodeCapacity;
+    for (size_t i = 0; i < nodes; i++) {
+      try {
+        T* t = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
+        external_.push_back(t);
+      } catch (...) {
+        for (size_t j = 0; j < i; j++) {
+          delete[] reinterpret_cast<uint8_t*>(external_[j]);
+        }
+        throw;
       }
-      for (auto it = other.begin(); it != other.end(); it++) {
+    }
+    size_ = size;
+    begin_ = iterator(&external_, 0, 0);
+    end_ = begin_ + size_;
+  }
+
+  Deque(size_t size, const T& value) : Deque<T>(size) {
+    for (iterator it = begin_; it != end_; it++) {
+      try {
+        new(external_[it.getExternalIdx()] + it.getIdx()) T(value);
+      } catch (...) {
+        for (auto i = begin_; i != it; i+=kNodeCapacity) {
+          delete[] reinterpret_cast<uint8_t*>(external_[i.getIdx()]);
+        }
+        throw;
+      }
+    }
+  }
+
+  Deque(const Deque<T>& other) : Deque<T>(0) {
+    for (auto it = other.begin(); it != other.end(); it++) {
+      try {
         push_back(*it);
+      } catch (...) {
+        for (auto i = begin_; i != end_; i+=kNodeCapacity) {
+          delete[] reinterpret_cast<uint8_t*>(external_[i.getIdx()]);
+        }
+        throw;
       }
+    }
+  }
+
+  ~Deque() {
+    for (auto it = begin_; it != end_; ++it) {
+      it->~T();
+    }
+    for (size_t i = 0; i < external_.size(); ++i) {
+      delete[] reinterpret_cast<uint8_t*>(external_[i]);
+    }
+  }
+
+  Deque<T>& operator=(const Deque<T>& other) {
+    try {
+      Deque<T> tmp(other);
+      std::swap(external_, tmp.external_);
+      std::swap(size_, tmp.size_);
+      std::swap(begin_, tmp.begin_);
+      begin_.setPtr(&external_);
+      end_ = begin_ + size_;
+      return *this;
     } catch (...) {
-      while (size_ > 0) {
-        pop_back();
-      }
-      size_ = currentSize;
-      fakeNode_ = currentFakeNode;
-      begin_ = currentBegin;
-      end_ = currentEnd;
-      alloc_ = currentAlloc;
-      throw(std::exception());
-    }
-
-    for (iterator it = currentBegin; it != currentEnd; it++) {
-      AllocTraits::destroy(currentAlloc, reinterpret_cast<Node*>(it.getPtr()));
-    }
-    AllocTraits::deallocate(currentAlloc, reinterpret_cast<Node*>(currentBegin.getPtr()), currentSize);
-    return *this;
-  }
-
-  ~List() {
-    while(size_ > 0) {
-      pop_back();
-      // AllocTraits::deallocate(alloc_, it.getPtr(), alignof(Node));
+      throw;
     }
   }
 
-  node_alloc get_allocator() const {
-    return alloc_;
-  }
-
-  size_t size() const {
+  [[nodiscard]] size_t size() const noexcept {
     return size_;
   }
 
+  T& operator[](int n) noexcept {
+    return *(begin_ + n);
+  }
+  const T& operator[](int n) const noexcept {
+    return *(begin_ + n);
+  }
+  T& at(int n) {
+    if (n < 0 || (size_t)n >= size_){
+      throw std::out_of_range("incorrect index :(");
+    } else {
+      return operator[](n);
+    }
+  }
+  const T& at(int n) const {
+    if (n < 0 || (size_t)n >= size_){
+      throw std::out_of_range("incorrect index :(");
+    } else {
+      return operator[](n);
+    }
+  }
+
   void push_back(const T& value) {
-    insert(end_, value);
+    try {
+      if ((size_t)end_.getExternalIdx() >= external_.size()) {
+        reallocate(false);
+      }
+    } catch (...) {
+      throw;
+    }
+    new(external_[end_.getExternalIdx()] + end_.getIdx()) T(value);
+    ++size_;
+    ++end_;
   }
-
-  void pop_back() {
-    iterator pos = end_;
-    pos--;
-    erase(pos);
+  void pop_back() noexcept {
+    --size_;
+    --end_;
+    end_->~T();
   }
-
   void push_front(const T& value) {
-    insert(begin_, value);
+    try {
+      if (begin_.getExternalIdx() == 0 && begin_.getIdx() == 0) {
+        reallocate(true);
+      }
+    } catch (...) {
+      throw;
+    }
+    iterator prev = begin_ - 1;
+    new(external_[prev.getExternalIdx()] + prev.getIdx()) T(value);
+    --begin_;
+    ++size_;
+  }
+  void pop_front() noexcept {
+    --size_;
+    begin_->~T();
+    ++begin_;
   }
 
-  void pop_front() {
-    erase(begin_);
-  }
 
-  iterator begin() {
+  iterator begin() noexcept {
     return begin_;
   }
-
-  iterator end() {
+  iterator end() noexcept {
     return end_;
   }
-
-  const_iterator cbegin() const {
-    return static_cast<const_iterator>(begin_);
+  const_iterator cbegin() const noexcept {
+    return const_iterator(begin_);
   }
-
-  const_iterator cend() const {
-    return static_cast<const_iterator>(end_);
+  const_iterator cend() const noexcept {
+    return const_iterator(end_);
   }
-
-  const_iterator begin() const {
+  const_iterator begin() const noexcept {
     return cbegin();
   }
-
-  const_iterator end() const {
+  const_iterator end() const noexcept {
     return cend();
   }
-
-  reverse_iterator rbegin(){
-    return reverse_iterator(end());
+  std::reverse_iterator<iterator> rbegin() noexcept {
+    return std::reverse_iterator<iterator>(Deque<T>::end());
+  }
+  std::reverse_iterator<iterator> rend() noexcept {
+    return std::reverse_iterator<iterator>(Deque<T>::begin());
+  }
+  std::reverse_iterator<const_iterator> crbegin() noexcept {
+    return std::reverse_iterator<const_iterator>(Deque<T>::cend());
+  }
+  std::reverse_iterator<const_iterator> crend() noexcept {
+    return std::reverse_iterator<const_iterator>(Deque<T>::cbegin());
   }
 
-  reverse_iterator rend() {
-    return reverse_iterator(begin());
-  }
-
-  const_reverse_iterator rbegin() const {
-    return const_reverse_iterator(end());
-  }
-
-  const_reverse_iterator rend() const {
-    return const_reverse_iterator(begin());
-  }
-
-  const_reverse_iterator crbegin() const {
-    return const_reverse_iterator(List<T, Alloc>::cend());
-  }
-
-  const_reverse_iterator crend() const {
-    return const_reverse_iterator(cbegin());
-  }
-
-  void insert(const_iterator it, const T& value) {
-    Base* current = reinterpret_cast<Base*>(AllocTraits::allocate(alloc_, 1));
-    Base* prev = (it.getPtr())->prev_;
-    Base* next = reinterpret_cast<Base*>(it.getPtr());
+  void insert(iterator pos, const T& value) {
     try {
-      AllocTraits::construct(alloc_, reinterpret_cast<Node*>(current), value);
-      current->prev_ = prev;
-      current->next_ = next;
-      prev->next_ = current;
-      next->prev_ = current;
-      if (it == begin_) {
-        begin_ = iterator(current);
+      if ((size_t)pos.getExternalIdx() >= external_.size()) {
+        reallocate(false);
       }
-      ++size_;
     } catch (...) {
-      prev->next_ = next;
-      next->prev_ = prev;
-      if (iterator(current) == begin_) {
-        begin_ = next;
-      }
-      AllocTraits::destroy(alloc_, reinterpret_cast<Node*>(current));
-      AllocTraits::deallocate(alloc_, reinterpret_cast<Node*>(current), 1);
-      --size_;
       throw;
     }
+    ++end_;
+    for (iterator it = end_; it != pos; it--) {
+      std::swap(*it, *(it - 1));
+    }
+    *pos = value;
+    ++size_;
   }
 
-  void erase(const_iterator it) {
-    Base* current = it.getPtr();
-    Node* node = reinterpret_cast<Node*>(current);
-    Base* prev = current->prev_;
-    Base* next = current->next_;
-    try {
-      prev->next_ = next;
-      next->prev_ = prev;
-      AllocTraits::destroy(alloc_, node);
-      AllocTraits::deallocate(alloc_, node, 1);
-      if (it == begin_) {
-        begin_ = iterator(next);
+  void erase(iterator pos) noexcept {
+    for (iterator it = pos; it != end_ - 1; it++) {
+      std::swap(*it, *(it + 1));
+    }
+    --size_;
+    --end_;
+    end_->~T();
+  }
+
+private:
+  std::vector<T*> external_;
+  size_t size_ = 0;
+  iterator begin_;
+  iterator end_;
+
+  void reallocate(bool reallocateLeft) {
+    std::vector<T*> newExternal;
+    if (reallocateLeft) {
+      for (size_t i = 0; i < external_.size(); i++) {
+        try {
+          T* t = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
+          newExternal.push_back(t);
+        } catch (...) {
+          for (size_t j = 0; j < newExternal.size(); j++) {
+            delete[] reinterpret_cast<uint8_t*>(external_[j]);
+          }
+          throw;
+        }
       }
-      --size_;
-    } catch (...) {
-      Base* erased = reinterpret_cast<Base*>(AllocTraits::allocate(alloc_, 1));
-      AllocTraits::construct(alloc_, reinterpret_cast<Node*>(erased), node->value_);
-      erased->prev_ = prev;
-      erased->next_ = next;
-      prev->next_ = erased;
-      next->prev_ = erased;
-      if (iterator(next) == begin_) {
-        begin_ = erased;
+    }
+    for (size_t i = 0; i < external_.size(); i++) {
+      try {
+        newExternal.push_back(external_[i]);
+      } catch (...) {
+        for (size_t j = 0; j < newExternal.size(); j++) {
+          delete[] reinterpret_cast<uint8_t*>(external_[j]);
+        }
+        throw;
       }
-      ++size_;
-      throw;
+    }
+    if (!reallocateLeft) {
+      for (size_t i = 0; i < external_.size(); i++) {
+        try {
+          T* t = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
+          newExternal.push_back(t);
+        } catch (...) {
+          for (size_t j = 0; j < newExternal.size(); j++) {
+            delete[] reinterpret_cast<uint8_t*>(external_[j]);
+          }
+          throw;
+        }
+      }
+    }
+    std::swap(external_, newExternal);
+    if (reallocateLeft) {
+      begin_ = iterator(&external_, external_.size() / 2, 0);
+      end_ = iterator(&external_, end_.getExternalIdx() + external_.size() / 2, end_.getIdx());
+    } else {
+      end_ = iterator(&external_, external_.size() / 2, 0);
     }
   }
+};
+
+template<typename T>
+template<bool isConst>
+class Deque<T>::Iterator {
+public:
+  using value_type = T;
+  using pointer = typename std::conditional<isConst, const T*, T*>::type;
+  using reference = typename std::conditional<isConst, const T&, T&>::type;
+  using iterator_category = std::random_access_iterator_tag;
+
+  Iterator() = default;
+
+  Iterator(std::vector<T*>* ptr, size_t externalIdx, size_t idx):
+          ptr_(ptr), externalIdx_(externalIdx), idx_(idx) {}
+
+  Iterator(const Iterator& other): ptr_(other.ptr_), externalIdx_(other.externalIdx_), idx_(other.idx_) {}
+
+  ~Iterator() = default;
+
+  operator Iterator<true>() const {
+    return Iterator<true>(ptr_, externalIdx_, idx_);
+  }
+
+  size_t getExternalIdx() {
+    return externalIdx_;
+  }
+  size_t getIdx() {
+    return idx_;
+  }
+  void setPtr(std::vector<T*>* ptr) {
+    ptr_ = ptr;
+  }
+
+  const Iterator<isConst> operator++(int) {
+    Iterator tmp(*this);
+    *this += 1;
+    return tmp;
+  }
+  Iterator<isConst>& operator++() {
+    *this += 1;
+    return *this;
+  }
+  const Iterator<isConst> operator--(int) {
+    Iterator tmp(*this);
+    *this -= 1;
+    return tmp;
+  }
+  Iterator<isConst>& operator--() {
+    *this -= 1;
+    return *this;
+  }
+  Iterator<isConst>& operator+=(int n) {
+    if (n < 0) return *this -= -n;
+    if (idx_ + (size_t)n < kNodeCapacity) {
+      idx_ += n;
+    } else {
+      n -= kNodeCapacity - idx_ - 1;
+      externalIdx_ += (n - 1) / kNodeCapacity + 1;
+      idx_ = (n - 1) % kNodeCapacity;
+    }
+    return *this;
+  }
+  Iterator<isConst>& operator-=(int n) {
+    if (n < 0) return *this += -n;
+    if ((int)idx_ - n >= 0) {
+      idx_ -= n;
+    } else {
+      n -= idx_;
+      externalIdx_ -= (n - 1) / kNodeCapacity + 1;
+      idx_ = kNodeCapacity - ((n - 1) % kNodeCapacity) - 1;
+    }
+    return *this;
+  }
+  Iterator<isConst> operator+(int n) const {
+    Iterator ret(*this);
+    ret += n;
+    return ret;
+  }
+  Iterator<isConst> operator-(int n) const {
+    Iterator ret(*this);
+    ret -= n;
+    return ret;
+  }
+
+  bool operator<(Iterator<isConst> it) {
+    return (externalIdx_ < it.getExternalIdx() || (externalIdx_ == it.getExternalIdx() && idx_ < it.getIdx()));
+  }
+  bool operator==(Iterator<isConst> it) {
+    return !(*this < it) && !(it < *this);
+  }
+  bool operator>(Iterator<isConst> it) {
+    return !(*this < it || *this == it);
+  }
+  bool operator<=(Iterator<isConst> it) {
+    return !(it > *this);
+  }
+  bool operator>=(Iterator<isConst> it) {
+    return !(*this < it);
+  }
+  bool operator!=(Iterator<isConst> it) {
+    return (*this < it || it < *this);
+  }
+
+  size_t operator-(Iterator<isConst> it) {
+    size_t result = 0;
+    if (*this < it) {
+      result = -(it - *this);
+    } else if (externalIdx_ == it.externalIdx_) {
+      result = idx_ - it.idx_;
+    } else {
+      result = (size_t)(abs((int)externalIdx_ - (int)it.externalIdx_) - 1) * kNodeCapacity + (kNodeCapacity - it.idx_) + idx_;
+    }
+    return result;
+  }
+
+  reference operator*() const {
+    return (*ptr_)[externalIdx_][idx_];
+  }
+  pointer operator->() const {
+    return &(operator*());
+  }
+
+private:
+  std::vector<T*>* ptr_;
+  size_t externalIdx_ = 0;
+  size_t idx_ = 0;
 };
