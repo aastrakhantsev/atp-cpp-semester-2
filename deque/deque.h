@@ -37,13 +37,16 @@ public:
     end_ = begin_ + size_;
   }
 
-  Deque(size_t size, const T& value) : Deque<T>(size) {
-    for (iterator it = begin_; it != end_; it++) {
+  Deque(size_t size, const T& value) : Deque<T>(0) {
+    for (size_t i = 0; i < size; i++) {
       try {
-        new(external_[it.getExternalIdx()] + it.getIdx()) T(value);
+        push_back(value);
       } catch (...) {
-        for (auto i = begin_; i != it; i+=kNodeCapacity) {
-          delete[] reinterpret_cast<uint8_t*>(external_[i.getIdx()]);
+        for (size_t j = 0; j < i; j++) {
+          pop_back();
+        }
+        for (size_t j = 0; j < external_.size(); j++) {
+          delete[] reinterpret_cast<uint8_t*>(external_[j]);
         }
         throw;
       }
@@ -51,12 +54,15 @@ public:
   }
 
   Deque(const Deque<T>& other) : Deque<T>(0) {
-    for (auto it = other.begin(); it != other.end(); it++) {
+    for (size_t i = 0; i < other.size(); i++) {
       try {
-        push_back(*it);
+        push_back(other.at(i));
       } catch (...) {
-        for (auto i = begin_; i != end_; i+=kNodeCapacity) {
-          delete[] reinterpret_cast<uint8_t*>(external_[i.getIdx()]);
+        for (size_t j = 0; j < i; j++) {
+          pop_back();
+        }
+        for (size_t j = 0; j < external_.size(); j++) {
+          delete[] reinterpret_cast<uint8_t*>(external_[j]);
         }
         throw;
       }
