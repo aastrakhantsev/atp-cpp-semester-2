@@ -17,35 +17,20 @@ public:
   using const_iterator = Iterator<true>;
   using iterator_category = std::random_access_iterator_tag;
 
-  Deque() noexcept : Deque<T>(0) {}
+  Deque() noexcept : Deque<T>(0, T()) {}
 
-  explicit Deque(size_t size) {
-    size_t nodes = (size + kNodeCapacity) / kNodeCapacity;
-    for (size_t i = 0; i < nodes; i++) {
-      try {
-        T* t = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
-        external_.push_back(t);
-      } catch (...) {
-        for (size_t j = 0; j < i; j++) {
-          delete[] reinterpret_cast<uint8_t*>(external_[j]);
-        }
-        throw;
-      }
-    }
-    size_ = size;
+  explicit Deque(size_t size) noexcept : Deque<T> (size, T()) {}
+
+  Deque(size_t size, const T& value) {
+    T* t1 = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
+    external_.push_back(t1);
     begin_ = iterator(&external_, 0, 0);
-    end_ = begin_ + size_;
-  }
-
-  Deque(size_t size, const T& value) : Deque<T>(0) {
+    end_ = begin_;
     for (size_t i = 0; i < size; i++) {
       try {
         push_back(value);
       } catch (...) {
         for (size_t j = 0; j < i; j++) {
-          pop_back();
-        }
-        for (size_t j = 0; j < external_.size(); j++) {
           delete[] reinterpret_cast<uint8_t*>(external_[j]);
         }
         throw;
@@ -53,17 +38,11 @@ public:
     }
   }
 
-  Deque(const Deque<T>& other) : Deque<T>(0) {
+  Deque(const Deque<T>& other) : Deque<T>(0, T()) {
     for (size_t i = 0; i < other.size(); i++) {
       try {
         push_back(other.at(i));
       } catch (...) {
-        for (size_t j = 0; j < i; j++) {
-          pop_back();
-        }
-        for (size_t j = 0; j < external_.size(); j++) {
-          delete[] reinterpret_cast<uint8_t*>(external_[j]);
-        }
         throw;
       }
     }
@@ -218,48 +197,34 @@ private:
 
   void reallocate(bool reallocateLeft) {
     std::vector<T*> newExternal;
-    if (reallocateLeft) {
+    try {
+      if (reallocateLeft) {
+        for (size_t i = 0; i < external_.size(); i++) {
+            T*t = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
+            newExternal.push_back(t);
+        }
+      }
       for (size_t i = 0; i < external_.size(); i++) {
-        try {
-          T* t = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
-          newExternal.push_back(t);
-        } catch (...) {
-          for (size_t j = 0; j < newExternal.size(); j++) {
-            delete[] reinterpret_cast<uint8_t*>(external_[j]);
-          }
-          throw;
+          newExternal.push_back(external_[i]);
+      }
+      if (!reallocateLeft) {
+        for (size_t i = 0; i < external_.size(); i++) {
+            T*t = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
+            newExternal.push_back(t);
         }
       }
-    }
-    for (size_t i = 0; i < external_.size(); i++) {
-      try {
-        newExternal.push_back(external_[i]);
-      } catch (...) {
-        for (size_t j = 0; j < newExternal.size(); j++) {
-          delete[] reinterpret_cast<uint8_t*>(external_[j]);
-        }
-        throw;
+      std::swap(external_, newExternal);
+      if (reallocateLeft) {
+        begin_ = iterator(&external_, external_.size() / 2, 0);
+        end_ = iterator(&external_, end_.getExternalIdx() + external_.size() / 2, end_.getIdx());
+      } else {
+        end_ = iterator(&external_, external_.size() / 2, 0);
       }
-    }
-    if (!reallocateLeft) {
-      for (size_t i = 0; i < external_.size(); i++) {
-        try {
-          T* t = reinterpret_cast<T*>(new uint8_t[kNodeCapacity * sizeof(T)]);
-          newExternal.push_back(t);
-        } catch (...) {
-          for (size_t j = 0; j < newExternal.size(); j++) {
-            delete[] reinterpret_cast<uint8_t*>(external_[j]);
-          }
-          throw;
-        }
+    } catch (...) {
+      for (size_t i = 0; i < newExternal.size(); i++) {
+        delete[] reinterpret_cast<char*>(newExternal[i]);
       }
-    }
-    std::swap(external_, newExternal);
-    if (reallocateLeft) {
-      begin_ = iterator(&external_, external_.size() / 2, 0);
-      end_ = iterator(&external_, end_.getExternalIdx() + external_.size() / 2, end_.getIdx());
-    } else {
-      end_ = iterator(&external_, external_.size() / 2, 0);
+      throw;
     }
   }
 };
